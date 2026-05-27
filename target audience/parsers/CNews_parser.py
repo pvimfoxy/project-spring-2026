@@ -49,7 +49,7 @@ _DEMO_NEWS = [
 class CNewsMultiParser(BaseParser):
     DEFAULT_SOURCES = [
         {"segment": "госструктуры", "news_url": "https://gov.cnews.ru/news"},
-        {"segment": "банки",        "news_url": "https://www.banks.cnews.ru/news"},
+        {"segment": "банки",        "news_url": "https://banks.cnews.ru/news"},
         {"segment": "ритейлеры",    "news_url": "https://retail.cnews.ru/news"},
     ]
 
