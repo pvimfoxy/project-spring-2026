@@ -131,7 +131,7 @@ class CBRBankSeleniumParser(BaseParser):
                 if len(cols) < 2:   # пустые/заголовочные строки
                     continue
 
-                # ── Колонки (могут быть 4 или 5 в зависимости от фильтра) ────
+                # Колонки 
                 reg_number   = cols[0].text.strip()
                 # Название лежит внутри <a> в cols[1]
                 name_links   = cols[1].find_elements(By.TAG_NAME, "a")
