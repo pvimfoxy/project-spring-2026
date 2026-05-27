@@ -1,0 +1,278 @@
+"""
+Парсер кредитных организаций с сайта Банка России.
+
+• Страница /banking_sector/credit/ — Angular-SPA, список банков
+  рендерится JS через XHR-запрос. Selenium нужен только для
+  ожидания этого рендера.
+
+• Реальный CSS-селектор таблицы: div.table-wrapper > table
+  (class="data" на этой странице отсутствует!)
+
+• Колонки таблицы (слева направо):
+    0  — Рег. номер
+    1  — Наименование (ссылка на карточку банка)
+    2  — Местонахождение (город)
+    3  — Дата регистрации
+    4  — Тип лицензии (или дата отзыва)
+
+• Альтернатива без Selenium: страница FullCoList/ отдаёт
+  полный список статическим HTML — парсится через requests+BS4,
+  что надёжнее и быстрее. Реализована как fallback-метод.
+"""
+
+import time
+import requests
+from bs4 import BeautifulSoup
+from parsers.base_parser import BaseParser
+
+try:
+    from selenium import webdriver
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+    from selenium.webdriver.chrome.options import Options
+    from selenium.common.exceptions import TimeoutException, WebDriverException
+    SELENIUM_AVAILABLE = True
+except ImportError:
+    SELENIUM_AVAILABLE = False
+
+
+_BASE        = "https://www.cbr.ru"
+_LIST_JS     = f"{_BASE}/banking_sector/credit/"      # Angular-страница
+_LIST_STATIC = f"{_BASE}/banking_sector/credit/FullCoList/"  # статический HTML
+
+# CSS-селектор таблицы (реальный, не "table.data")
+_TABLE_CSS   = "div.table-wrapper table"
+# XPath строк (быстрее для Selenium)
+_ROW_CSS     = "div.table-wrapper table tbody tr"
+
+
+class CBRBankSeleniumParser(BaseParser):
+    """
+    Динамический парсер банков с сайта ЦБ РФ.
+
+    По умолчанию использует requests + BeautifulSoup (статический список),
+    если Selenium недоступен или упал — автоматически переключается.
+    Если явно передать use_selenium=True, использует Selenium.
+
+    Собирает: рег. номер, название, город, дата регистрации, тип лицензии.
+    """
+
+    def __init__(
+        self,
+        output_path: str = "banks_cbr.csv",
+        headless: bool = True,
+        use_selenium: bool = False,   # ← False = быстрый режим по умолчанию
+    ):
+        super().__init__(output_path)
+        self.headless     = headless
+        self.use_selenium = use_selenium and SELENIUM_AVAILABLE
+        self.driver       = None
+
+    # Selenium: инициализация 
+
+    def _init_driver(self) -> None:
+        options = Options()
+        if self.headless:
+            options.add_argument("--headless=new")   # новый headless Chrome 112+
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--window-size=1920,1080")
+        options.add_argument("--disable-gpu")
+        # Убираем признаки автоматизации (некоторые сайты проверяют)
+        options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        options.add_experimental_option("useAutomationExtension", False)
+        self.driver = webdriver.Chrome(options=options)
+        self.driver.implicitly_wait(5)
+
+    # Selenium: загрузка страницы 
+
+    def fetch_selenium(self) -> bool:
+        """
+        Загружает Angular-страницу и ждёт рендера таблицы.
+        Возвращает True при успехе.
+        """
+        if not self.driver:
+            self._init_driver()
+
+        print(f"  [Selenium] GET {_LIST_JS}")
+        self.driver.get(_LIST_JS)
+
+        try:
+            WebDriverWait(self.driver, 20).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, _TABLE_CSS))
+            )
+            # Дополнительно ждём хотя бы одной строки данных
+            WebDriverWait(self.driver, 10).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, _ROW_CSS))
+            )
+            print("  [Selenium] Таблица загружена.")
+            return True
+        except TimeoutException:
+            print("  [Selenium] Таблица не появилась за 20 сек — пробуем статический URL.")
+            return False
+        except WebDriverException as e:
+            print(f"  [Selenium] WebDriverException: {e}")
+            return False
+
+    # Selenium: парсинг строк 
+
+    def parse_selenium(self) -> int:
+        """
+        Извлекает строки из уже загруженной таблицы через Selenium.
+        Возвращает количество добавленных записей.
+        """
+        rows = self.driver.find_elements(By.CSS_SELECTOR, _ROW_CSS)
+        added = 0
+
+        for row in rows:
+            try:
+                cols = row.find_elements(By.TAG_NAME, "td")
+                if len(cols) < 2:   # пустые/заголовочные строки
+                    continue
+
+                # ── Колонки (могут быть 4 или 5 в зависимости от фильтра) ────
+                reg_number   = cols[0].text.strip()
+                # Название лежит внутри <a> в cols[1]
+                name_links   = cols[1].find_elements(By.TAG_NAME, "a")
+                name         = name_links[0].text.strip() if name_links else cols[1].text.strip()
+                city         = cols[2].text.strip() if len(cols) > 2 else ""
+                reg_date     = cols[3].text.strip() if len(cols) > 3 else ""
+                license_type = cols[4].text.strip() if len(cols) > 4 else ""
+
+                # Ссылка на карточку банка
+                card_url = ""
+                if name_links:
+                    href = name_links[0].get_attribute("href") or ""
+                    card_url = href if href.startswith("http") else f"{_BASE}{href}"
+
+                self.data.append({
+                    "reg_number":   reg_number,
+                    "name":         name,
+                    "city":         city,
+                    "reg_date":     reg_date,
+                    "license_type": license_type,
+                    "card_url":     card_url,
+                    "source":       "cbr_selenium",
+                })
+                added += 1
+
+            except Exception as e:
+                print(f"  [!] Ошибка строки: {e}")
+                continue
+
+        return added
+
+    def fetch_static(self) -> str | None:
+        """
+        Загружает статическую страницу полного списка банков.
+        Не требует Selenium — работает через обычный HTTP-запрос.
+        """
+        print(f"  [Static] GET {_LIST_STATIC}")
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            "Accept-Language": "ru-RU,ru;q=0.9",
+        }
+        try:
+            resp = requests.get(_LIST_STATIC, headers=headers, timeout=15)
+            resp.raise_for_status()
+            resp.encoding = "utf-8"
+            return resp.text
+        except requests.RequestException as e:
+            print(f"  [!] Ошибка загрузки статической страницы: {e}")
+            return None
+
+    def parse_static(self, html: str) -> int:
+        """
+        Парсит статическую таблицу FullCoList/.
+        Структура: <table> с колонками рег.номер / название / город / … .
+        Возвращает количество добавленных записей.
+        """
+        soup = BeautifulSoup(html, "html.parser")
+        added = 0
+
+        # Ищем таблицу
+        table = (
+            soup.find("table", class_="data")           # если есть class
+            or soup.find("div", class_="table-wrapper")  # обёртка
+            and soup.find("div", class_="table-wrapper").find("table")
+            or soup.find("table")                        # любая первая таблица
+        )
+
+        if not table:
+            print("  [!] Таблица в HTML не найдена.")
+            return 0
+
+        for row in table.select("tbody tr"):
+            cols = row.find_all("td")
+            if len(cols) < 2:
+                continue
+
+            reg_number   = cols[0].get_text(strip=True)
+            # Название: может быть ссылка или просто текст
+            a_tag        = cols[1].find("a")
+            name         = a_tag.get_text(strip=True) if a_tag else cols[1].get_text(strip=True)
+            card_url     = ""
+            if a_tag and a_tag.get("href"):
+                href = a_tag["href"]
+                card_url = href if href.startswith("http") else f"{_BASE}{href}"
+
+            city         = cols[2].get_text(strip=True) if len(cols) > 2 else ""
+            reg_date     = cols[3].get_text(strip=True) if len(cols) > 3 else ""
+            license_type = cols[4].get_text(strip=True) if len(cols) > 4 else ""
+
+            self.data.append({
+                "reg_number":   reg_number,
+                "name":         name,
+                "city":         city,
+                "reg_date":     reg_date,
+                "license_type": license_type,
+                "card_url":     card_url,
+                "source":       "cbr_static",
+            })
+            added += 1
+
+        return added
+
+    def run(self):
+        added = 0
+        try:
+            if self.use_selenium:
+                # Selenium 
+                ok = self.fetch_selenium()
+                if ok:
+                    added = self.parse_selenium()
+                # Если Selenium не смог — падаем на статику
+                if not ok or added == 0:
+                    print("  Переключаемся на статическую загрузку...")
+                    html = self.fetch_static()
+                    if html:
+                        added = self.parse_static(html)
+            else:
+                # Статический режим 
+                html = self.fetch_static()
+                if html:
+                    added = self.parse_static(html)
+
+        finally:
+            if self.driver:
+                self.driver.quit()
+                self.driver = None
+
+        df = self.to_dataframe()
+        self.save(df)
+        print(f"\n✓ Собрано банков: {len(df)}")
+        if not df.empty:
+            print(df[["reg_number", "name", "city", "license_type"]].head(5).to_string(index=False))
+        return df
+
+
+if __name__ == "__main__":
+    # Быстрый запуск без Selenium:
+    parser = CBRBankSeleniumParser(output_path="banks_cbr.csv", use_selenium=False)
+    df = parser.run()
+
