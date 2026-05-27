@@ -15,18 +15,18 @@ class CNewsMultiParser(BaseParser):
     DEFAULT_SOURCES = [
         {
             "segment": "госструктуры",
-            "base_url": "https://gov.cnews.ru",
-            "news_url": "https://gov.cnews.ru/news",
+            "base_url": "https://www.cnews.ru",
+            "news_url": "https://gov.cnews.ru",
         },
         {
             "segment": "банки",
             "base_url": "https://www.cnews.ru",
-            "news_url": "https://www.cnews.ru/news/line/cnews_finance",   
+            "news_url": "https://www.banks.cnews.ru",   
         },
         {
             "segment": "ритейлеры",
             "base_url": "https://www.cnews.ru",
-            "news_url": "https://www.cnews.ru/news/line/cnews_retail",    
+            "news_url": "https://www.retail.cnews.ru",    
         },
     ]
 
