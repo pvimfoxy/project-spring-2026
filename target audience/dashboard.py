@@ -155,15 +155,23 @@ def fig_segments_pie():
             .update_layout(**GRAPH_LAYOUT))
 
 def fig_city_bar():
-    if city_top.empty: return go.Figure().update_layout(**GRAPH_LAYOUT, title="Нет данных")
+    if city_top.empty:
+        return go.Figure().update_layout(**GRAPH_LAYOUT, title="Нет данных")
+
+    layout = {
+        **GRAPH_LAYOUT,
+        "yaxis": dict(autorange="reversed"),
+        "coloraxis_showscale": False,
+        "margin": dict(t=44, b=16, l=150, r=30),   # перебивает margin из GRAPH_LAYOUT
+    }
+
     return (px.bar(city_top, x="count", y="city", orientation="h",
                    color="count", color_continuous_scale="Blues", text="count",
-                   labels={"city":"Город","count":"Банков"},
-                   title="Топ-15 городов по концентрации банков (потенциал продаж)")
+                   labels={"city": "Город", "count": "Банков"},
+                   title="Топ-15 городов по концентрации банков")
             .update_traces(textposition="outside")
-            .update_layout(**GRAPH_LAYOUT, yaxis=dict(autorange="reversed"),
-                           coloraxis_showscale=False,
-                           margin=dict(t=44, b=16, l=150, r=30)))
+            .update_layout(**layout))
+
 
 def fig_license_pie():
     if lic_counts.empty: return go.Figure().update_layout(**GRAPH_LAYOUT, title="Нет данных")
